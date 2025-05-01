@@ -20,8 +20,12 @@
 #include <string.h>
 #include <math.h>
 #include <linux/futex.h>
+#include <sys/socket.h>
 #include <sys/syscall.h>
 #include <sys/sysinfo.h>
+#include <sys/types.h>
+#include <sys/utsname.h>
+#include <netdb.h>
 
 #define PLAT_BITS	8
 #define PLAT_VAL	(1 << PLAT_BITS)
@@ -61,6 +65,8 @@ static int requests_per_sec = 0;
 static int calibrate_only = 0;
 /* -L bool no locking during CPU work */
 static int skip_locking = 0;
+/* -j json file */
+static char *json_file = NULL;
 
 /* the message threads flip this to true when they decide runtime is up */
 static volatile unsigned long stopping = 0;
@@ -107,7 +113,7 @@ enum {
 	HELP_LONG_OPT = 1,
 };
 
-char *option_string = "p:m:t:Cr:R:w:i:z:A:n:F:L";
+char *option_string = "p:m:t:Cr:R:w:i:z:A:n:F:Lj:";
 static struct option long_options[] = {
 	{"pipe", required_argument, 0, 'p'},
 	{"message-threads", required_argument, 0, 'm'},
@@ -122,6 +128,7 @@ static struct option long_options[] = {
 	{"warmuptime", required_argument, 0, 'w'},
 	{"intervaltime", required_argument, 0, 'i'},
 	{"zerotime", required_argument, 0, 'z'},
+	{"json", required_argument, 0, 'j'},
 	{"help", no_argument, 0, HELP_LONG_OPT},
 	{0, 0, 0, 0}
 };
@@ -142,6 +149,7 @@ static void print_usage(void)
 		"\t-w (--warmuptime): how long to warmup before resetting stats (seconds, def: 0)\n"
 		"\t-i (--intervaltime): interval for printing latencies (seconds, def: 10)\n"
 		"\t-z (--zerotime): interval for zeroing latencies (seconds, def: never)\n"
+		"\t-j (--json) <file>: output in json format (def: false)\n"
 	       );
 	exit(1);
 }
@@ -208,6 +216,13 @@ static void parse_options(int ac, char **av)
 			break;
 		case 'F':
 			cache_footprint_kb = atoi(optarg);
+			break;
+		case 'j':
+			json_file = strdup(optarg);
+			if (!json_file) {
+				perror("strdup");
+				exit(1);
+			}
 			break;
 		case '?':
 		case HELP_LONG_OPT:
@@ -416,6 +431,107 @@ static void show_latencies(struct stats *s, char *label, char *units,
 		free(ocounts);
 
 	fprintf(stderr, "\t  min=%u, max=%u\n", s->min, s->max);
+}
+
+static char *escape_string(char *str)
+{
+	char *newstr = malloc(strlen(str) * 2 + 1);
+	char *ptr = newstr;
+	int maxlen = strlen(str) * 2;
+	int len = strlen(str);
+
+	if (!newstr) {
+		perror("malloc");
+		exit(1);
+	}
+	memcpy(newstr, str, strlen(str));
+	while ((ptr = strchr(ptr, '"'))) {
+		if (len == maxlen - 1) {
+			free(newstr);
+			return NULL;
+		}
+		memmove(ptr + 1, ptr, len - (ptr - newstr));
+		*ptr = '\\';
+		ptr += 2;
+		len++;
+	}
+	newstr[len] = '\0';
+	return newstr;
+}
+
+static void write_json_header(FILE *fp, char **argv, int argc)
+{
+	struct addrinfo hints, *info;
+	struct utsname u[1024];
+
+	uname(u);
+
+	fprintf(fp, "{");
+	fprintf(fp, "\"schbench\": {");
+	fprintf(fp, "\"version\": \"%s\",", u->release);
+
+	memset(&hints, 0, sizeof(hints));
+	hints.ai_family = AF_UNSPEC;
+	hints.ai_socktype = SOCK_STREAM;
+	hints.ai_flags = AI_CANONNAME;
+
+	if (getaddrinfo(u->nodename, NULL, &hints, &info) == 0) {
+		fprintf(fp, "\"hostname\": \"%s\",", info->ai_canonname);
+		freeaddrinfo(info);
+	} else {
+		fprintf(fp, "\"hostname\": \"%s\",", u->nodename);
+	}
+
+	fprintf(fp, "\"cmdline\": \"");
+	for (int i = 0; i < argc; i++) {
+		if (i)
+			fprintf(fp, " ");
+		if (strchr(argv[i], '"')) {
+			char *newstr = escape_string(argv[i]);
+			if (!newstr) {
+				fprintf(stderr, "escape_string failed\n");
+				exit(1);
+			}
+			fprintf(fp, "%s", newstr);
+			free(newstr);
+		} else {
+			fprintf(fp, "%s", argv[i]);
+		}
+	}
+	fprintf(fp, "\"");
+}
+
+static void write_json_stats(FILE *fp, struct stats *s, char *label)
+{
+	unsigned int *ovals = NULL;
+	unsigned long *ocounts = NULL;
+	unsigned int len, i;
+
+	len = calc_percentiles(s->plat, s->nr_samples, &ovals, &ocounts);
+	if (len) {
+		fprintf(fp, ", \"%s\": {", label);
+		fprintf(fp, "\"percentiles\": {");
+		for (i = 0; i < len; i++) {
+			if (i)
+				fprintf(fp, ", ");
+			fprintf(fp, "\"%2.1f\": %u", plist[i], ovals[i]);
+		}
+		fprintf(fp, "},");
+		fprintf(fp, "\"min\": %u,", s->min);
+		fprintf(fp, "\"max\": %u", s->max);
+		fprintf(fp, "}");
+	}
+
+	if (ovals)
+		free(ovals);
+	if (ocounts)
+		free(ocounts);
+}
+
+static void write_json_footer(FILE *fp)
+{
+	fprintf(fp, "}}");
+	fflush(fp);
 }
 
 /* fold latency info from s into d */
@@ -1421,6 +1537,31 @@ int main(int ac, char **av)
 	loops_per_sec /= loop_runtime;
 
 	free(message_threads_mem);
+
+	if (json_file) {
+		FILE *outfile;
+
+		if (strcmp(json_file, "-") == 0)
+			outfile = stdout;
+		else
+			outfile = fopen(json_file, "w");
+		if (!json_file) {
+			perror("unable to open json file");
+			exit(1);
+		}
+		write_json_header(outfile, av, ac);
+		write_json_stats(outfile, &wakeup_stats, "wakeup_latency");
+		if (!pipe_test) {
+			write_json_stats(outfile, &request_stats,
+					 "request_latency");
+			write_json_stats(outfile, &rps_stats,
+					 "rps");
+		}
+		fprintf(outfile, ", \"runtime\": %u", runtime);
+		write_json_footer(outfile);
+		if (outfile != stdout)
+			fclose(outfile);
+	}
 
 	if (pipe_test) {
 		char *pretty;
