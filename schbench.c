@@ -8,8 +8,11 @@
  *
  * gcc -Wall -O0 -W schbench.c -o schbench -lpthread
  */
+#define _GNU_SOURCE
+
 #include <stdio.h>
 #include <stdlib.h>
+#include <sched.h>
 #include <pthread.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -81,6 +84,10 @@ struct per_cpu_lock {
 static struct per_cpu_lock *per_cpu_locks;
 static int num_cpu_locks;
 
+/* for pinning message threads to CPUs */
+static cpu_set_t *message_cpus = NULL;
+static cpu_set_t __message_cpus = { 0 };
+
 /*
  * one stat struct per thread data, when the workers sleep this records the
  * latency between when they are woken up and when they actually get the
@@ -113,10 +120,11 @@ enum {
 	HELP_LONG_OPT = 1,
 };
 
-char *option_string = "p:m:t:Cr:R:w:i:z:A:n:F:Lj:";
+char *option_string = "p:m:M:t:Cr:R:w:i:z:A:n:F:Lj:";
 static struct option long_options[] = {
 	{"pipe", required_argument, 0, 'p'},
 	{"message-threads", required_argument, 0, 'm'},
+	{"message-cpus", required_argument, 0, 'M'},
 	{"threads", required_argument, 0, 't'},
 	{"runtime", required_argument, 0, 'r'},
 	{"rps", required_argument, 0, 'R'},
@@ -139,6 +147,7 @@ static void print_usage(void)
 		"\t-C (--calibrate): run our work loop and report on timing\n"
 		"\t-L (--no-locking): don't spinlock during CPU work (def: locking on)\n"
 		"\t-m (--message-threads): number of message threads (def: 1)\n"
+		"\t-M (--message-cpus): pin message threads to these CPUs 'a-m,n-z' (def: no pinning)\n"
 		"\t-t (--threads): worker threads per message thread (def: num_cpus)\n"
 		"\t-r (--runtime): How long to run before exiting (seconds, def: 30)\n"
 		"\t-F (--cache_footprint): cache footprint (kb, def: 256)\n"
@@ -152,6 +161,58 @@ static void print_usage(void)
 		"\t-j (--json) <file>: output in json format (def: false)\n"
 	       );
 	exit(1);
+}
+
+/*
+ * returns 0 if we fail to parse and 1 if we succeed
+ */
+int parse_cpuset(const char *str, cpu_set_t *cpuset)
+{
+	char *input;
+	CPU_ZERO(cpuset);
+	if (!str || !*str)
+		return 0; // Empty string is invalid
+
+	input = strdup(str);
+	if (!input)
+		return 0;
+	char *token = strtok(input, ",");
+	while (token) {
+		char *dash = strchr(token, '-');
+		char *endptr;
+		long start, end;
+
+		if (dash) {
+			*dash = '\0';
+			dash++;
+			errno = 0;
+			start = strtol(token, &endptr, 10);
+			if (errno || *endptr != '\0' || start < 0) {
+				free(input);
+				return 0;
+			}
+			errno = 0;
+			end = strtol(dash, &endptr, 10);
+			if (errno || *endptr != '\0' || end < start) {
+				free(input);
+				return 0;
+			}
+			for (long i = start; i <= end; ++i) {
+				CPU_SET(i, cpuset);
+			}
+		} else {
+			errno = 0;
+			start = strtol(token, &endptr, 10);
+			if (errno || *endptr != '\0' || start < 0) {
+				free(input);
+				return 0;
+			}
+			CPU_SET(start, cpuset);
+		}
+		token = strtok(NULL, ",");
+	}
+	free(input);
+	return 1;
 }
 
 static void parse_options(int ac, char **av)
@@ -195,6 +256,13 @@ static void parse_options(int ac, char **av)
 			break;
 		case 'm':
 			message_threads = atoi(optarg);
+			break;
+		case 'M':
+			if (!parse_cpuset(optarg, &__message_cpus)) {
+				fprintf(stderr, "failed to parse cpuset information\n");
+				exit(1);
+			}
+			message_cpus = &__message_cpus;
 			break;
 		case 't':
 			worker_threads = atoi(optarg);
@@ -573,6 +641,8 @@ struct request {
  */
 struct thread_data {
 	pthread_t tid;
+	/* used for pinning to CPUs etc, just a counter for which thread we are */
+	unsigned long index;
 	/* ->next is for placing us on the msg_thread's list for waking */
 	struct thread_data *next;
 
@@ -1218,6 +1288,39 @@ void *worker_thread(void *arg)
 	return NULL;
 }
 
+int find_nth_set_bit(const cpu_set_t *set, int n)
+{
+	int count = 0;
+	for (int i = 0; i < CPU_SETSIZE; ++i) {
+		if (CPU_ISSET(i, set)) {
+			if (count == n)
+				return i; // Return the CPU index of the n’th set bit
+			++count;
+		}
+	}
+	return -1; // Not found
+}
+
+static void pin_to_cpu(int index, cpu_set_t *possible_cpus)
+{
+	cpu_set_t cpuset;
+	int ret;
+	CPU_ZERO(&cpuset);
+	int num_possible = CPU_COUNT(possible_cpus);
+	int cpu_to_set = index % num_possible;
+
+	cpu_to_set = find_nth_set_bit(possible_cpus, cpu_to_set);
+	CPU_SET(cpu_to_set, &cpuset); // Pin to CPU 0
+
+	pthread_t thread = pthread_self();
+	ret = pthread_setaffinity_np(thread, sizeof(cpu_set_t), &cpuset);
+	if (ret) {
+		fprintf(stderr, "unable to set CPU affinity to cpu %d\n", cpu_to_set);
+		exit(1);
+	}
+	fprintf(stderr, "Pinning to message thread index %d cpu %d\n", index, cpu_to_set);
+}
+
 /*
  * the message thread starts his own gaggle of workers and then sits around
  * replying when they post him.  He collects latency stats as all the threads
@@ -1253,7 +1356,11 @@ void *message_thread(void *arg)
 			exit(1);
 		}
 		worker_threads_mem[i].tid = tid;
+		worker_threads_mem[i].index = i;
 	}
+
+	if (message_cpus)
+		pin_to_cpu(td->index, message_cpus);
 
 	if (requests_per_sec)
 		run_rps_thread(worker_threads_mem);
@@ -1513,6 +1620,8 @@ int main(int ac, char **av)
 	for (i = 0; i < message_threads; i++) {
 		pthread_t tid;
 		int index = i * worker_threads + i;
+		struct thread_data *td = message_threads_mem + index;
+		td->index = i;
 		ret = pthread_create(&tid, NULL, message_thread,
 				     message_threads_mem + index);
 		if (ret) {
