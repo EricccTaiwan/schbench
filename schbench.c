@@ -1144,9 +1144,6 @@ static void run_rps_thread(struct thread_data *worker_threads_mem)
 			break;
 		}
 	}
-
-	if (auto_rps)
-		fprintf(stderr, "final rps goal was %d\n", requests_per_sec);
 }
 
 /*
@@ -1692,9 +1689,13 @@ int main(int ac, char **av)
 			       PLIST_FOR_LAT, PLIST_99);
 		show_latencies(&rps_stats, "RPS", "requests", runtime,
 			       PLIST_FOR_RPS, PLIST_50);
-		if (!auto_rps)
+		if (!auto_rps) {
 			fprintf(stderr, "average rps: %.2f\n",
 				(double)(loop_count) / runtime);
+		} else {
+			fprintf(stderr, "final rps goal was %d\n",
+	                        requests_per_sec * message_threads);
+		}
 	}
 
 	return 0;
