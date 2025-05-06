@@ -1027,38 +1027,40 @@ static void run_rps_thread(struct thread_data *worker_threads_mem)
 	unsigned long long delta;
 
 	/* how long do we sleep between each wake */
-	unsigned long sleep_time;
-	int batch = 8;
+	unsigned long batch = 128;
 	int cur_tid = 0;
 	int i;
 
 	while (1) {
 		gettimeofday(&start, NULL);
-		sleep_time = (USEC_PER_SEC / requests_per_sec) * batch;
 		for (i = 1; i < requests_per_sec + 1; i++) {
 			struct thread_data *worker;
 
+			if (stopping)
+				break;
 			gettimeofday(&now, NULL);
 
 			worker = worker_threads_mem + cur_tid % worker_threads;
 			cur_tid++;
 
 			/* at some point, there's just too much, don't queue more */
-			if (worker->pending > 8) {
-				continue;
+			if (worker->pending > batch) {
+				__sync_synchronize();
+				if (worker->pending > batch) {
+					usleep(100);
+					continue;
+				}
 			}
 			worker->pending++;
 			request = allocate_request();
 			request_add(worker, request);
 			memcpy(&worker->wake_time, &now, sizeof(now));
 			fpost(&worker->futex);
-			if ((i % batch) == 0)
-				usleep(sleep_time);
 		}
 		gettimeofday(&now, NULL);
 
 		delta = tvdelta(&start, &now);
-		while (delta < USEC_PER_SEC) {
+		while (!stopping && delta < USEC_PER_SEC) {
 			delta = USEC_PER_SEC - delta;
 			usleep(delta);
 
