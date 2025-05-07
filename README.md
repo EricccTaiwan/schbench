@@ -172,11 +172,14 @@ Print a report about our latencies and RPS ever N seconds.
 -z (--zerotime): interval for zeroing latencies (seconds, def: never)
 Zero all of our stats on a regular basis.
 
--M (--message-cpus): list of cpus (a-n,m-z) the message threads are allowed to use
--W (--worker-cpus): list of cpus (a-n,m-z) the worker threads are allowed to use
+-M (--message-cpus): list of cpus (a-n,m-z) the message threads are allowed to use, or "auto"
+-W (--worker-cpus): list of cpus (a-n,m-z) the worker threads are allowed to use, or "auto"
 
 Each message thread is pinned to a single CPU, round robin style through the set of
 supplied CPUS.
 
 Each worker thread is pinned to the entire set of supplied CPUs.  These two
 sets are allowed to overlap.
+
+If auto pinning mode is used, each message thread is pinned to a single CPU,
+starting with CPU 0.  Worker threads are pinned to all of the remaining CPUs.

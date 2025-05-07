@@ -150,8 +150,8 @@ static void print_usage(void)
 		"\t-C (--calibrate): run our work loop and report on timing\n"
 		"\t-L (--no-locking): don't spinlock during CPU work (def: locking on)\n"
 		"\t-m (--message-threads): number of message threads (def: 1)\n"
-		"\t-M (--message-cpus): pin message threads to these CPUs 'a-m,n-z' (def: no pinning)\n"
-		"\t-W (--worker-cpus): pin worker threads to these CPUs 'a-m,n-z' (def: no pinning)\n"
+		"\t-M (--message-cpus): pin message threads to these CPUs 'a-m,n-z' or 'auto' (def: no pinning)\n"
+		"\t-W (--worker-cpus): pin worker threads to these CPUs 'a-m,n-z' or 'auto' (def: no pinning)\n"
 		"\t-t (--threads): worker threads per message thread (def: num_cpus)\n"
 		"\t-r (--runtime): How long to run before exiting (seconds, def: 30)\n"
 		"\t-F (--cache_footprint): cache footprint (kb, def: 256)\n"
@@ -219,10 +219,31 @@ int parse_cpuset(const char *str, cpu_set_t *cpuset)
 	return 1;
 }
 
+/*
+ * -M and -W can take "auto", which means:
+ *  give each message thread its own CPU
+ *  give each worker thread all of the remaining CPUs
+ */
+static void thread_auto_pin(int m_threads, cpu_set_t *m_cpus,
+				     cpu_set_t *w_cpus)
+{
+	int i = 0;
+	CPU_ZERO(m_cpus);
+	for (int i = 0; i < m_threads; ++i) {
+		CPU_SET(i, m_cpus);
+		CPU_CLR(i, w_cpus);
+	}
+	for (; i < CPU_SETSIZE; i++) {
+		CPU_SET(i, w_cpus);
+	}
+	fprintf(stderr, "auto pinning message and worker threads\n");
+}
+
 static void parse_options(int ac, char **av)
 {
 	int c;
 	int found_warmuptime = -1;
+	int found_auto_pin = 0;
 
 	while (1) {
 		int option_index = 0;
@@ -262,14 +283,18 @@ static void parse_options(int ac, char **av)
 			message_threads = atoi(optarg);
 			break;
 		case 'M':
-			if (!parse_cpuset(optarg, &__message_cpus)) {
+			if (!strcmp(optarg, "auto")) {
+				found_auto_pin = 1;
+			} else if (!parse_cpuset(optarg, &__message_cpus)) {
 				fprintf(stderr, "failed to parse cpuset information\n");
 				exit(1);
 			}
 			message_cpus = &__message_cpus;
 			break;
 		case 'W':
-			if (!parse_cpuset(optarg, &__worker_cpus)) {
+			if (!strcmp(optarg, "auto")) {
+				found_auto_pin = 1;
+			} else if (!parse_cpuset(optarg, &__worker_cpus)) {
 				fprintf(stderr, "failed to parse cpuset information\n");
 				exit(1);
 			}
@@ -311,7 +336,12 @@ static void parse_options(int ac, char **av)
 			break;
 		}
 	}
-
+	if (found_auto_pin) {
+		thread_auto_pin(message_threads,
+		  &__message_cpus, &__worker_cpus);
+		worker_cpus = &__worker_cpus;
+		message_cpus = &__message_cpus;
+	}
 	/*
 	 * by default pipe mode zeros out some options.  This
 	 * sets them to any args that were actually passed in
@@ -1309,7 +1339,7 @@ int find_nth_set_bit(const cpu_set_t *set, int n)
 	return -1; // Not found
 }
 
-static void pin_to_cpu(int index, cpu_set_t *possible_cpus)
+static void pin_message_cpu(int index, cpu_set_t *possible_cpus)
 {
 	cpu_set_t cpuset;
 	int ret;
@@ -1381,7 +1411,7 @@ void *message_thread(void *arg)
 	}
 
 	if (message_cpus)
-		pin_to_cpu(td->index, message_cpus);
+		pin_message_cpu(td->index, message_cpus);
 
 	if (requests_per_sec)
 		run_rps_thread(worker_threads_mem);
