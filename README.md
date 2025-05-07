@@ -171,3 +171,12 @@ Print a report about our latencies and RPS ever N seconds.
 
 -z (--zerotime): interval for zeroing latencies (seconds, def: never)
 Zero all of our stats on a regular basis.
+
+-M (--message-cpus): list of cpus (a-n,m-z) the message threads are allowed to use
+-W (--worker-cpus): list of cpus (a-n,m-z) the worker threads are allowed to use
+
+Each message thread is pinned to a single CPU, round robin style through the set of
+supplied CPUS.
+
+Each worker thread is pinned to the entire set of supplied CPUs.  These two
+sets are allowed to overlap.

@@ -84,9 +84,11 @@ struct per_cpu_lock {
 static struct per_cpu_lock *per_cpu_locks;
 static int num_cpu_locks;
 
-/* for pinning message threads to CPUs */
+/* for pinning threads to CPUs */
 static cpu_set_t *message_cpus = NULL;
 static cpu_set_t __message_cpus = { 0 };
+static cpu_set_t *worker_cpus = NULL;
+static cpu_set_t __worker_cpus = { 0 };
 
 /*
  * one stat struct per thread data, when the workers sleep this records the
@@ -120,11 +122,12 @@ enum {
 	HELP_LONG_OPT = 1,
 };
 
-char *option_string = "p:m:M:t:Cr:R:w:i:z:A:n:F:Lj:";
+char *option_string = "p:m:M:W:t:Cr:R:w:i:z:A:n:F:Lj:";
 static struct option long_options[] = {
 	{"pipe", required_argument, 0, 'p'},
 	{"message-threads", required_argument, 0, 'm'},
 	{"message-cpus", required_argument, 0, 'M'},
+	{"worker-cpus", required_argument, 0, 'W'},
 	{"threads", required_argument, 0, 't'},
 	{"runtime", required_argument, 0, 'r'},
 	{"rps", required_argument, 0, 'R'},
@@ -148,6 +151,7 @@ static void print_usage(void)
 		"\t-L (--no-locking): don't spinlock during CPU work (def: locking on)\n"
 		"\t-m (--message-threads): number of message threads (def: 1)\n"
 		"\t-M (--message-cpus): pin message threads to these CPUs 'a-m,n-z' (def: no pinning)\n"
+		"\t-W (--worker-cpus): pin worker threads to these CPUs 'a-m,n-z' (def: no pinning)\n"
 		"\t-t (--threads): worker threads per message thread (def: num_cpus)\n"
 		"\t-r (--runtime): How long to run before exiting (seconds, def: 30)\n"
 		"\t-F (--cache_footprint): cache footprint (kb, def: 256)\n"
@@ -263,6 +267,13 @@ static void parse_options(int ac, char **av)
 				exit(1);
 			}
 			message_cpus = &__message_cpus;
+			break;
+		case 'W':
+			if (!parse_cpuset(optarg, &__worker_cpus)) {
+				fprintf(stderr, "failed to parse cpuset information\n");
+				exit(1);
+			}
+			worker_cpus = &__worker_cpus;
 			break;
 		case 't':
 			worker_threads = atoi(optarg);
@@ -1318,6 +1329,16 @@ static void pin_to_cpu(int index, cpu_set_t *possible_cpus)
 	fprintf(stderr, "Pinning to message thread index %d cpu %d\n", index, cpu_to_set);
 }
 
+static void pin_worker_cpus(cpu_set_t *worker_cpus)
+{
+	int ret;
+	pthread_t thread = pthread_self();
+	ret = pthread_setaffinity_np(thread, sizeof(cpu_set_t), worker_cpus);
+	if (ret) {
+		fprintf(stderr, "unable to set CPU affinity\n");
+	}
+}
+
 /*
  * the message thread starts his own gaggle of workers and then sits around
  * replying when they post him.  He collects latency stats as all the threads
@@ -1336,6 +1357,9 @@ void *message_thread(void *arg)
 		perror("unable to allocate ram");
 		pthread_exit((void *)-ENOMEM);
 	}
+
+	if (worker_cpus)
+		pin_worker_cpus(worker_cpus);
 
 	for (i = 0; i < worker_threads; i++) {
 		pthread_t tid;
