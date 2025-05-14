@@ -1,133 +1,284 @@
 #!/usr/bin/env python3
-# GPLv2 license, spit out /proc/schedstat
-# this works with schedstat v15
 
-import sys,os, time
+import sys
+import time
 
-cpustat_txt = [ 'cpu zeros', # 0
-                'sched_yied()', # 1
-                'zeros',
-                'schedule()', # 3
-                'sched->idle()', #4
-                'try_to_wake_up()', #5
-                'try_to_wakeup(local)', #6
-                'run time', #7
-                'wait time', #8
-                'timeslices,' #9
-                ]
-                
-domain_txt = [ 'domain zeros', #0
-               'IDLE lb_count', #1
-               'IDLE lb_balanced', #2
-               'IDLE lb_failed', #3
-               'IDLE lb_imbalance', #4
-               'IDLE lb_gained', #5
-               'IDLE lb_hot_gained', #6
-               'IDLE lb_nobusyq', #7
-               'IDLE lb_nobusyg', #8
-               'BUSY lb_count', #9
-               'BUSY lb_balanced', #10
-               'BUSY lb_failed', #11
-               'BUSY lb_imbalance', #12
-               'BUSY lb_gained', #13
-               'BUSY lb_hot_gained', #14
-               'BUSY lb_nobusyq', #15
-               'BUSY lb_nobusyg', #16
-               'NEW IDLE lb_count', #17
-               'NEW IDLE lb_balanced', #18
-               'NEW IDLE lb_failed', #19
-               'NEW IDLE lb_imbalance', #20
-               'NEW IDLE lb_gained', #21
-               'NEW IDLE lb_hot_gained', #22
-               'NEW IDLE lb_nobusyq', #23
-               'NEW IDLE lb_nobusyg', #24
-               'alb_count', #25
-               'alb_failed', #26
-               'alb_pushed', #27
-               'sbe_count', #28
-               'sbe_balanced', #29
-               'sbe_pushed', #30
-               'sbf_count', #31
-               'sbf_balanced', #32
-               'sbf_pushed', #33
-               'ttwu_wake_remote', #34
-               'ttwu_move_affine', #35
-               'ttwu_move_balance', #36
-               ]
+# Domain fields by schedstat version
+# read kernel/sched/stats.c:show_schedstat() to find the definitions
+DOMAIN_FIELDS_V15 = [
+    # CPU_IDLE
+    "lb_count_idle",
+    "lb_balance_idle",
+    "lb_failed_idle",
+    "lb_imbalance_idle",
+    "lb_gained_idle",
+    "lb_hot_gained_idle",
+    "lb_nobusyq_idle",
+    "lb_nobusyg_idle",
 
-def add_at_index(ar, index, val):
-    while index >= len(ar):
-        ar.append(0)
-    ar[index] += val
-    
-def diff_arrays (start, now, seconds):
-    results = []
-    for i in range(0, len(start)):
-        val = float(now[i] - start[i]) / seconds
-        results.append(round(val, 2))
-        if results[i] < 0:
-            results[i] = 0
-    return results
+    # CPU_NOT_IDLE
+    "lb_count_not_idle",
+    "lb_balance_not_idle",
+    "lb_failed_not_idle",
+    "lb_imbalance_not_idle",
+    "lb_gained_not_idle",
+    "lb_hot_gained_not_idle",
+    "lb_nobusyq_not_idle",
+    "lb_nobusyg_not_idle",
+
+    # CPU_NEWLY_IDLE
+    "lb_count_newly_idle",
+    "lb_balance_newly_idle",
+    "lb_failed_newly_idle",
+    "lb_imbalance_newly_idle",
+    "lb_gained_newly_idle",
+    "lb_hot_gained_newly_idle",
+    "lb_nobusyq_newly_idle",
+    "lb_nobusyg_newly_idle",
+
+    "alb_count",
+    "alb_failed",
+    "alb_pushed",
+    "sbe_cnt",
+    "sbe_balanced",
+    "sbe_pushed",
+    "sbf_cnt",
+    "sbf_balanced",
+    "sbf_pushed",
+    "ttwu_wake_remote",
+    "ttwu_move_affine",
+    "ttwu_move_balance"
+]
+
+# this is the same as v15, but the order of the idle type enum
+# is different
+DOMAIN_FIELDS_V16 = [
+    # __CPU_NOT_IDLE
+    "lb_count_not_idle",
+    "lb_balance_not_idle",
+    "lb_failed_not_idle",
+    "lb_imbalance_not_idle",
+    "lb_gained_not_idle",
+    "lb_hot_gained_not_idle",
+    "lb_nobusyq_not_idle",
+    "lb_nobusyg_not_idle",
+
+    # CPU_IDLE
+    "lb_count_idle",
+    "lb_balance_idle",
+    "lb_failed_idle",
+    "lb_imbalance_idle",
+    "lb_gained_idle",
+    "lb_hot_gained_idle",
+    "lb_nobusyq_idle",
+    "lb_nobusyg_idle",
+
+    # CPU_NEWLY_IDLE
+    "lb_count_newly_idle",
+    "lb_balance_newly_idle",
+    "lb_failed_newly_idle",
+    "lb_imbalance_newly_idle",
+    "lb_gained_newly_idle",
+    "lb_hot_gained_newly_idle",
+    "lb_nobusyq_newly_idle",
+    "lb_nobusyg_newly_idle",
+
+    "alb_count",
+    "alb_failed",
+    "alb_pushed",
+    "sbe_cnt",
+    "sbe_balanced",
+    "sbe_pushed",
+    "sbf_cnt",
+    "sbf_balanced",
+    "sbf_pushed",
+    "ttwu_wake_remote",
+    "ttwu_move_affine",
+    "ttwu_move_balance"
+]
+
+DOMAIN_FIELDS_V17 = [
+    # __CPU_NOT_IDLE
+    "lb_count_not_idle",
+    "lb_balance_not_idle",
+    "lb_failed_not_idle",
+    "lb_imbalance_load_not_idle",
+    "lb_imbalance_util_not_idle",
+    "lb_imbalance_task_not_idle",
+    "lb_imbalance_misfit_not_idle",
+    "lb_gained_not_idle",
+    "lb_hot_gained_not_idle",
+    "lb_nobusyq_not_idle",
+    "lb_nobusyg_not_idle",
+
+    # CPU_IDLE
+    "lb_count_idle",
+    "lb_balance_idle",
+    "lb_failed_idle",
+    "lb_imbalance_load_idle",
+    "lb_imbalance_util_idle",
+    "lb_imbalance_task_idle",
+    "lb_imbalance_misfit_idle",
+    "lb_gained_idle",
+    "lb_hot_gained_idle",
+    "lb_nobusyq_idle",
+    "lb_nobusyg_idle",
+
+    # CPU_NEWLY_IDLE
+    "lb_count_newly_idle",
+    "lb_balance_newly_idle",
+    "lb_failed_newly_idle",
+    "lb_imbalance_load_newly_idle",
+    "lb_imbalance_util_newly_idle",
+    "lb_imbalance_task_newly_idle",
+    "lb_imbalance_misfit_newly_idle",
+    "lb_gained_newly_idle",
+    "lb_hot_gained_newly_idle",
+    "lb_nobusyq_newly_idle",
+    "lb_nobusyg_newly_idle",
+
+    "alb_count",
+    "alb_failed",
+    "alb_pushed",
+    "sbe_cnt",
+    "sbe_balanced",
+    "sbe_pushed",
+    "sbf_cnt",
+    "sbf_balanced",
+    "sbf_pushed",
+    "ttwu_wake_remote",
+    "ttwu_move_affine",
+    "ttwu_move_balance"
+]
+
+# Common CPU fields (adjust if your kernel differs)
+# these are the same in 15 and 17
+CPU_FIELDS = [
+    "yld_count", "sched_count", "sched_goidle", "ttwu_count",
+    "ttwu_local", "rq_cpu_time", "rq_run_delay", "rq_pcount"
+]
+
+
+def detect_schedstat_version():
+    with open("/proc/schedstat", "r") as f:
+        for line in f:
+            if line.startswith("version"):
+                return int(line.strip().split()[1])
+    return 15  # Default to v15 if not specified
+
+
+def parse_domains(lines, version):
+    domains = []
+    for line in lines:
+        if line.startswith("domain"):
+            parts = line.split()
+            if version == 17:
+                values = list(map(int, parts[3:]))
+                fields = DOMAIN_FIELDS_V17
+            elif version == 16:
+                values = list(map(int, parts[2:]))
+                fields = DOMAIN_FIELDS_V16
+            elif version == 15:
+                values = list(map(int, parts[2:]))
+                fields = DOMAIN_FIELDS_V15
+            else:
+                sys.stderr.write("Unsupported schedstat version %d" % version)
+                sys.exit(1)
+            domain = dict(zip(fields, values))
+            domains.append(domain)
+    return domains
+
+
+def parse_cpus(lines):
+    cpus = {}
+    for line in lines:
+        if line.startswith("cpu") and not line.startswith("cpufreq"):
+            parts = line.split()
+            cpu_id = parts[0]
+            values = list(map(int, parts[1:]))
+            cpus[cpu_id] = values
+    return cpus
+
 
 def read_schedstat():
-    stats = open('/proc/schedstat', 'r')
-    cpustat = []
-    domainstat = []
-    while True:
-        l = stats.readline()
-        if not l:
-            break;
+    version = detect_schedstat_version()
+    with open("/proc/schedstat", "r") as f:
+        lines = [line.strip() for line in f if line.strip() and
+                 not line.startswith("version")]
+    domains = parse_domains(lines, version)
+    cpus = parse_cpus(lines)
+    return version, domains, cpus
 
-        if l.startswith('cpu'):
-            words = l.split()
-            for i in range(1, len(words)):
-                add_at_index(cpustat, i, int(words[i]))
 
-        if l.startswith('domain'):
-            # the documentation starts counting assuming domainN cpumask are
-            # one field
-            words = l.split()[1:]
-            for i in range(2, len(words)):
-                add_at_index(domainstat, i, int(words[i]))
-    return (cpustat, domainstat)
-            
-def print_stat(label, desc, ar):
-    c = 0
-    max_width = 0
+def sum_domains(domains):
+    if not domains:
+        return {}
+    summed = {}
+    for field in domains[0].keys():
+        summed[field] = sum(domain.get(field, 0) for domain in domains)
+    return summed
 
-    for x in desc:
-        if len(x) > max_width:
-            max_width = len(x)
 
-    print(label)
-    for i in range(0, len(ar)):
-        print(f'#{i} {desc[i]:<{max_width}} {ar[i]:<20}', end=' ')
-        c += 1
-        if c % 1 == 0:
-            print("")
-    if c % 1 != 0:
-            print("")
+def print_delta(delta, label):
+    print(f"\nSystem-wide domain counter deltas ({label}):")
+    for field, value in delta.items():
+        print(f"{field}: {value}")
 
-start_time = time.time()
-last_cpustat, last_domainstat = read_schedstat()
-sleep_time = 1
 
-if len(sys.argv) > 1:
-    sleep_time = int(sys.argv[1])
+def cpu_delta(start_cpus, end_cpus):
+    if not start_cpus or not end_cpus:
+        return []
+    num_fields = min(len(list(start_cpus.values())[0]),
+                     len(list(end_cpus.values())[0]))
+    combined = [0] * num_fields
+    for cpu in start_cpus:
+        if cpu in end_cpus:
+            start_vals = start_cpus[cpu]
+            end_vals = end_cpus[cpu]
+            for i in range(num_fields):
+                combined[i] += end_vals[i] - start_vals[i]
+    return combined
 
-while True:
-    time.sleep(sleep_time)
-    now_time = time.time()
-    cpustat, domainstat = read_schedstat()
-    
-    res_cpustat = diff_arrays(last_cpustat, cpustat, now_time - start_time)
-    res_domainstat = diff_arrays(last_domainstat, domainstat, now_time - start_time)
 
-    print_stat("cpu", cpustat_txt, res_cpustat)
-    print_stat("domain", domain_txt, res_domainstat)
+def print_cpu_deltas(deltas, field_names=None):
 
-    last_cpustat = cpustat
-    last_domainstat =  domainstat
-    start_time = now_time
-    
+    print("\nCombined CPU field deltas (all CPUs):")
+    if field_names is None:
+        for idx, val in enumerate(deltas):
+            print(f"field_{idx}: {val}")
+    else:
+        for name, val in zip(field_names, deltas):
+            print(f"{name}: {val}")
 
+
+def main():
+    if len(sys.argv) != 2:
+        print(f"Usage: {sys.argv[0]} <interval_seconds>")
+        sys.exit(1)
+    try:
+        interval = float(sys.argv[1])
+    except Exception:
+        print("Interval must be a number (seconds).")
+        sys.exit(1)
+
+    version, start_domains, start_cpus = read_schedstat()
+    start_sum = sum_domains(start_domains)
+
+    time.sleep(interval)
+
+    _, end_domains, end_cpus = read_schedstat()
+    end_sum = sum_domains(end_domains)
+
+    # Print domain deltas
+    delta = {field: end_sum.get(field, 0) - start_sum.get(field, 0)
+             for field in start_sum.keys()}
+    print_delta(delta, f"interval {interval}s")
+
+    # Print combined CPU field deltas
+    cpu_field_names = CPU_FIELDS
+    deltas = cpu_delta(start_cpus, end_cpus)
+    print_cpu_deltas(deltas, cpu_field_names)
+
+
+if __name__ == "__main__":
+    main()
