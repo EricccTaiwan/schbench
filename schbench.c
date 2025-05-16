@@ -531,11 +531,14 @@ static void write_json_header(FILE *fp, char **argv, int argc)
 {
 	struct addrinfo hints, *info;
 	struct utsname u[1024];
+	time_t seconds;
 
 	uname(u);
 
+	seconds = time(NULL);
 	fprintf(fp, "{");
-	fprintf(fp, "\"schbench\": {");
+	fprintf(fp, "\"int\": {\"time\": %lu},", seconds);
+	fprintf(fp, "\"normal\": {");
 	fprintf(fp, "\"version\": \"%s\",", u->release);
 
 	memset(&hints, 0, sizeof(hints));
@@ -577,17 +580,14 @@ static void write_json_stats(FILE *fp, struct stats *s, char *label)
 
 	len = calc_percentiles(s->plat, s->nr_samples, &ovals, &ocounts);
 	if (len) {
-		fprintf(fp, ", \"%s\": {", label);
-		fprintf(fp, "\"percentiles\": {");
+		fprintf(fp, ", ");
 		for (i = 0; i < len; i++) {
 			if (i)
 				fprintf(fp, ", ");
-			fprintf(fp, "\"%2.1f\": %u", plist[i], ovals[i]);
+			fprintf(fp, "\"%s_pct%2.1f\": %u", label, plist[i], ovals[i]);
 		}
-		fprintf(fp, "},");
-		fprintf(fp, "\"min\": %u,", s->min);
-		fprintf(fp, "\"max\": %u", s->max);
-		fprintf(fp, "}");
+		fprintf(fp, ", \"%s_min\": %u,", label, s->min);
+		fprintf(fp, "\"%s_max\": %u", label, s->max);
 	}
 
 	if (ovals)
