@@ -585,7 +585,6 @@ static void write_json_header(FILE *fp, char **argv, int argc)
 
 	seconds = time(NULL);
 	fprintf(fp, "{");
-	fprintf(fp, "\"int\": {\"time\": %lu},", seconds);
 	fprintf(fp, "\"normal\": {");
 	fprintf(fp, "\"version\": \"%s\",", u->release);
 
@@ -617,7 +616,8 @@ static void write_json_header(FILE *fp, char **argv, int argc)
 			fprintf(fp, "%s", argv[i]);
 		}
 	}
-	fprintf(fp, "\"");
+	fprintf(fp, "\"},");
+	fprintf(fp, "\"int\": {\"time\": %lu, ", seconds);
 }
 
 static void write_json_stats(FILE *fp, struct stats *s, char *label)
@@ -628,7 +628,6 @@ static void write_json_stats(FILE *fp, struct stats *s, char *label)
 
 	len = calc_percentiles(s->plat, s->nr_samples, &ovals, &ocounts);
 	if (len) {
-		fprintf(fp, ", ");
 		for (i = 0; i < len; i++) {
 			if (i)
 				fprintf(fp, ", ");
@@ -1723,8 +1722,10 @@ int main(int ac, char **av)
 		write_json_header(outfile, av, ac);
 		write_json_stats(outfile, &wakeup_stats, "wakeup_latency");
 		if (!pipe_test) {
+			fprintf(outfile, ", ");
 			write_json_stats(outfile, &request_stats,
 					 "request_latency");
+			fprintf(outfile, ", ");
 			write_json_stats(outfile, &rps_stats,
 					 "rps");
 		}
