@@ -10,6 +10,7 @@
  */
 #define _GNU_SOURCE
 
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sched.h>
@@ -575,6 +576,48 @@ static char *escape_string(char *str)
 	return newstr;
 }
 
+static void chomp(char *buf)
+{
+	size_t max = strlen(buf);
+	size_t index = max - 1;
+
+	if (max == 0)
+		return;
+
+	while (index && isspace(buf[index])) index--;
+	index++;
+	buf[index] = '\0';
+}
+
+static void print_sched_ext_info(FILE *fp)
+{
+	char buf[1024];
+	FILE *tmpfile;
+	size_t nr_read;
+
+	tmpfile = fopen("/sys/kernel/sched_ext/state", "r");
+	if (!tmpfile)
+		goto no_sched_ext;
+	nr_read = fread(buf, 1, 1023, tmpfile);
+	buf[nr_read] = '\0';
+	fclose(tmpfile);
+	if (!strcmp(buf, "disabled"))
+		goto no_sched_ext;
+	tmpfile = fopen("/sys/kernel/sched_ext/root/ops", "r");
+	if (!tmpfile)
+		goto no_sched_ext;
+	nr_read = fread(buf, 1, 1023, tmpfile);
+	buf[nr_read] = '\0';
+	chomp(buf);
+	fclose(tmpfile);
+	if (nr_read == 0)
+		goto no_sched_ext;
+	fprintf(fp, "\"sched_ext\": \"%s\",", buf);
+	return;
+no_sched_ext:
+	fprintf(fp, "\"sched_ext\": \"disabled\",");
+}
+
 static void write_json_header(FILE *fp, char **argv, int argc)
 {
 	struct addrinfo hints, *info;
@@ -585,7 +628,6 @@ static void write_json_header(FILE *fp, char **argv, int argc)
 
 	seconds = time(NULL);
 	fprintf(fp, "{");
-	fprintf(fp, "\"int\": {\"time\": %lu},", seconds);
 	fprintf(fp, "\"normal\": {");
 	fprintf(fp, "\"version\": \"%s\",", u->release);
 
@@ -600,6 +642,8 @@ static void write_json_header(FILE *fp, char **argv, int argc)
 	} else {
 		fprintf(fp, "\"hostname\": \"%s\",", u->nodename);
 	}
+
+	print_sched_ext_info(fp);
 
 	fprintf(fp, "\"cmdline\": \"");
 	for (int i = 0; i < argc; i++) {
@@ -617,7 +661,8 @@ static void write_json_header(FILE *fp, char **argv, int argc)
 			fprintf(fp, "%s", argv[i]);
 		}
 	}
-	fprintf(fp, "\"");
+	fprintf(fp, "\"},");
+	fprintf(fp, "\"int\": {\"time\": %lu, ", seconds);
 }
 
 static void write_json_stats(FILE *fp, struct stats *s, char *label)
@@ -628,7 +673,6 @@ static void write_json_stats(FILE *fp, struct stats *s, char *label)
 
 	len = calc_percentiles(s->plat, s->nr_samples, &ovals, &ocounts);
 	if (len) {
-		fprintf(fp, ", ");
 		for (i = 0; i < len; i++) {
 			if (i)
 				fprintf(fp, ", ");
@@ -1723,8 +1767,10 @@ int main(int ac, char **av)
 		write_json_header(outfile, av, ac);
 		write_json_stats(outfile, &wakeup_stats, "wakeup_latency");
 		if (!pipe_test) {
+			fprintf(outfile, ", ");
 			write_json_stats(outfile, &request_stats,
 					 "request_latency");
+			fprintf(outfile, ", ");
 			write_json_stats(outfile, &rps_stats,
 					 "rps");
 		}
