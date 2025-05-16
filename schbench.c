@@ -57,6 +57,8 @@ static int zerotime = 0;
 static unsigned long cache_footprint_kb = 256;
 /* -n  operations */
 static unsigned long operations = 5;
+/* -s  sleep_usec */
+static unsigned long sleep_usec = 100;
 /* -A, int percentage busy */
 static int auto_rps = 0;
 static int auto_rps_target_hit = 0;
@@ -122,7 +124,7 @@ enum {
 	HELP_LONG_OPT = 1,
 };
 
-char *option_string = "p:m:M:W:t:Cr:R:w:i:z:A:n:F:Lj:";
+char *option_string = "p:m:M:W:t:Cr:R:w:i:z:A:n:F:Lj:s:";
 static struct option long_options[] = {
 	{"pipe", required_argument, 0, 'p'},
 	{"message-threads", required_argument, 0, 'm'},
@@ -136,6 +138,7 @@ static struct option long_options[] = {
 	{"calibrate", no_argument, 0, 'C'},
 	{"no-locking", no_argument, 0, 'L'},
 	{"operations", required_argument, 0, 'n'},
+	{"sleep_usec", required_argument, 0, 'n'},
 	{"warmuptime", required_argument, 0, 'w'},
 	{"intervaltime", required_argument, 0, 'i'},
 	{"zerotime", required_argument, 0, 'z'},
@@ -156,6 +159,7 @@ static void print_usage(void)
 		"\t-r (--runtime): How long to run before exiting (seconds, def: 30)\n"
 		"\t-F (--cache_footprint): cache footprint (kb, def: 256)\n"
 		"\t-n (--operations): think time operations to perform (def: 5)\n"
+		"\t-s (--sleep_usec): think time sleep (usecs) per request\n"
 		"\t-A (--auto-rps): grow RPS until cpu utilization hits target (def: none)\n"
 		"\t-p (--pipe): transfer size bytes to simulate a pipe test (def: 0)\n"
 		"\t-R (--rps): requests per second mode (count, def: 0)\n"
@@ -317,6 +321,9 @@ static void parse_options(int ac, char **av)
 			break;
 		case 'n':
 			operations = atoi(optarg);
+			break;
+		case 's':
+			sleep_usec = atoi(optarg);
 			break;
 		case 'F':
 			cache_footprint_kb = atoi(optarg);
@@ -1292,7 +1299,8 @@ void *worker_thread(void *arg)
 					 * in calibration mode, don't include the
 					 * usleep in the timing
 					 */
-					usleep(100);
+					if (sleep_usec > 0)
+						usleep(sleep_usec);
 					gettimeofday(&work_start, NULL);
 				} else {
 					/*
@@ -1300,7 +1308,8 @@ void *worker_thread(void *arg)
 					 * and also make sure we get a fresh clean timeslice
 					 */
 					gettimeofday(&work_start, NULL);
-					usleep(100);
+					if (sleep_usec > 0)
+						usleep(sleep_usec);
 				}
 				do_work(td);
 			}

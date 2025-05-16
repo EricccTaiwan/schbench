@@ -154,6 +154,8 @@ The size of our matrix for worker thread math.
 -n (--operations): think time operations to perform (def: 5)
 The number of times we'll loop on the matrix math in each request.
 
+-s (--sleep_usec): time to sleep during each requests, in usec (def: 100)
+
 -A (--auto-rps): grow RPS until cpu utilization hits target (def: none)
 Instead of trying to fully saturate the system, target a specific CPU utilization percentage.
 
