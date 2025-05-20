@@ -73,6 +73,8 @@ static int calibrate_only = 0;
 static int skip_locking = 0;
 /* -j json file */
 static char *json_file = NULL;
+/* -J jobname */
+static char *jobname = NULL;
 
 /* the message threads flip this to true when they decide runtime is up */
 static volatile unsigned long stopping = 0;
@@ -125,7 +127,7 @@ enum {
 	HELP_LONG_OPT = 1,
 };
 
-char *option_string = "p:m:M:W:t:Cr:R:w:i:z:A:n:F:Lj:s:";
+char *option_string = "p:m:M:W:t:Cr:R:w:i:z:A:n:F:Lj:s:J:";
 static struct option long_options[] = {
 	{"pipe", required_argument, 0, 'p'},
 	{"message-threads", required_argument, 0, 'm'},
@@ -144,6 +146,7 @@ static struct option long_options[] = {
 	{"intervaltime", required_argument, 0, 'i'},
 	{"zerotime", required_argument, 0, 'z'},
 	{"json", required_argument, 0, 'j'},
+	{"jobname", required_argument, 0, 'J'},
 	{"help", no_argument, 0, HELP_LONG_OPT},
 	{0, 0, 0, 0}
 };
@@ -168,6 +171,7 @@ static void print_usage(void)
 		"\t-i (--intervaltime): interval for printing latencies (seconds, def: 10)\n"
 		"\t-z (--zerotime): interval for zeroing latencies (seconds, def: never)\n"
 		"\t-j (--json) <file>: output in json format (def: false)\n"
+		"\t-J (--jobname) <name>: an optional jobname to add to the json output (def: none)\n"
 	       );
 	exit(1);
 }
@@ -333,6 +337,13 @@ static void parse_options(int ac, char **av)
 			json_file = strdup(optarg);
 			if (!json_file) {
 				perror("strdup");
+				exit(1);
+			}
+			break;
+		case 'J':
+			jobname = strdup(optarg);
+			if (!jobname) {
+				perror("stdrup");
 				exit(1);
 			}
 			break;
@@ -630,6 +641,9 @@ static void write_json_header(FILE *fp, char **argv, int argc)
 	fprintf(fp, "{");
 	fprintf(fp, "\"normal\": {");
 	fprintf(fp, "\"version\": \"%s\",", u->release);
+
+	if (jobname)
+		fprintf(fp, "\"jobname\": \"%s\",", jobname);
 
 	memset(&hints, 0, sizeof(hints));
 	hints.ai_family = AF_UNSPEC;
