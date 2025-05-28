@@ -746,7 +746,12 @@ struct request {
  * giant stats struct
  */
 struct thread_data {
+	/* opaque pthread tid */
 	pthread_t tid;
+
+	/* actual tid from SYS_gettid */
+	unsigned long sys_tid;
+
 	/* used for pinning to CPUs etc, just a counter for which thread we are */
 	unsigned long index;
 	/* ->next is for placing us on the msg_thread's list for waking */
@@ -770,6 +775,7 @@ struct thread_data {
 	/* mr axboe's magic latency histogram */
 	struct stats wakeup_stats;
 	struct stats request_stats;
+	unsigned long long avg_sched_delay;
 	unsigned long long loop_count;
 	unsigned long long runtime;
 	unsigned long pending;
@@ -1087,6 +1093,42 @@ float read_busy(int fd, char *buf, int len,
 	return 100.00 - ((float)delta_idle/(float)delta) * 100.00;
 }
 
+/*
+ * read the schedstats for a process and return the average scheduling delay
+ * in nanoseconds
+ */
+unsigned long long read_sched_delay(pid_t tid)
+{
+	unsigned long long runqueue_ns = 0;
+	unsigned long long running_ns = 0;
+	unsigned long long nr_scheduled = 0;
+	char path[96];
+
+	snprintf(path, sizeof(path), "/proc/%d/schedstat", tid);
+
+	FILE *fp = fopen(path, "r");
+	if (!fp) {
+		fprintf(stderr, "Failed to open %s: %s\n", path,
+			strerror(errno));
+		exit(errno);
+	}
+
+	/*
+	 * proc_pid_schedstat() in the kernel prints:
+	 * runtime, delay, pcount
+	 */
+	int ret = fscanf(fp, "%llu %llu %llu", &running_ns, &runqueue_ns,
+			 &nr_scheduled);
+	fclose(fp);
+
+	if (ret != 3) {
+		fprintf(stderr, "Failed to parse %s\n", path);
+		exit(1);
+	}
+
+	return runqueue_ns / nr_scheduled;
+}
+
 #if defined(__x86_64__) || defined(__i386__)
 #define nop __asm__ __volatile__("rep;nop": : :"memory")
 #elif defined(__aarch64__)
@@ -1307,6 +1349,11 @@ again:
 
 }
 
+unsigned long get_sys_tid(void)
+{
+	return syscall(SYS_gettid);
+}
+
 /*
  * spin or do some matrix arithmetic
  */
@@ -1336,6 +1383,8 @@ void *worker_thread(void *arg)
 	struct timeval start;
 	unsigned long long delta;
 	struct request *req = NULL;
+
+	td->sys_tid = get_sys_tid();
 
 	gettimeofday(&start, NULL);
 	while(1) {
@@ -1455,6 +1504,8 @@ void *message_thread(void *arg)
 		pthread_exit((void *)-ENOMEM);
 	}
 
+	td->sys_tid = get_sys_tid();
+
 	if (worker_cpus)
 		pin_worker_cpus(worker_cpus);
 
@@ -1531,6 +1582,38 @@ static void combine_message_thread_rps(struct thread_data *thread_data,
 	}
 }
 
+/*
+ * read /proc/pid/schedstat for each of our threads and average out the delay
+ * recorded on the kernel side for scheduling us.  This should be similar
+ * to the delays we record between wakeup and actually running, but differences
+ * can expose problems in different parts of the wakeup paths
+ */
+static void collect_sched_delay(struct thread_data *thread_data,
+				unsigned long long *message_thread_delay_ret,
+				unsigned long long *worker_thread_delay_ret)
+{
+	struct thread_data *worker;
+	unsigned long long message_thread_delay = 0;
+	unsigned long long worker_thread_delay = 0;
+	unsigned long long delay;
+	int i;
+	int msg_i;
+	int index = 0;
+
+	for (msg_i = 0; msg_i < message_threads; msg_i++) {
+		delay = read_sched_delay(thread_data[index].sys_tid);
+		message_thread_delay += delay;
+		index++;
+		for (i = 0; i < worker_threads; i++) {
+			worker = thread_data + index++;
+			delay = read_sched_delay(worker->sys_tid);
+			worker_thread_delay += delay;
+		}
+	}
+	*message_thread_delay_ret = message_thread_delay / message_threads;
+	*worker_thread_delay_ret = worker_thread_delay / (message_threads * worker_threads);
+}
+
 static void combine_message_thread_stats(struct stats *wakeup_stats,
 					 struct stats *request_stats,
 					struct thread_data *thread_data,
@@ -1568,6 +1651,7 @@ static void reset_thread_stats(struct thread_data *thread_data)
 		index++;
 		for (i = 0; i < worker_threads; i++) {
 			worker = thread_data + index++;
+			worker->avg_sched_delay = 0;
 			memset(&worker->wakeup_stats, 0, sizeof(worker->wakeup_stats));
 			memset(&worker->request_stats, 0, sizeof(worker->request_stats));
 		}
@@ -1593,6 +1677,8 @@ static void sleep_for_runtime(struct thread_data *message_threads_mem)
 	unsigned long long warmup_usec = warmuptime * USEC_PER_SEC;
 	unsigned long long interval_usec = intervaltime * USEC_PER_SEC;
 	unsigned long long zero_usec = zerotime * USEC_PER_SEC;
+	unsigned long long message_thread_delay;
+	unsigned long long worker_thread_delay;
 	int warmup_done = 0;
 
 	/* if we're autoscaling RPS */
@@ -1637,23 +1723,33 @@ static void sleep_for_runtime(struct thread_data *message_threads_mem)
 
 			delta = tvdelta(&last_calc, &now);
 			if (delta >= interval_usec) {
-
 				memset(&wakeup_stats, 0, sizeof(wakeup_stats));
-				memset(&request_stats, 0, sizeof(request_stats));
-				combine_message_thread_stats(&wakeup_stats,
-					     &request_stats, message_threads_mem,
-					     &loop_count, &loop_runtime);
+				memset(&request_stats, 0,
+				       sizeof(request_stats));
+				combine_message_thread_stats(
+					&wakeup_stats, &request_stats,
+					message_threads_mem, &loop_count,
+					&loop_runtime);
+				collect_sched_delay(message_threads_mem,
+						    &message_thread_delay,
+						    &worker_thread_delay);
 				last_calc = now;
 
-				show_latencies(&wakeup_stats, "Wakeup Latencies",
-					       "usec", runtime_delta / USEC_PER_SEC,
+				show_latencies(&wakeup_stats,
+					       "Wakeup Latencies", "usec",
+					       runtime_delta / USEC_PER_SEC,
 					       PLIST_FOR_LAT, PLIST_99);
-				show_latencies(&request_stats, "Request Latencies",
-					       "usec", runtime_delta / USEC_PER_SEC,
+				show_latencies(&request_stats,
+					       "Request Latencies", "usec",
+					       runtime_delta / USEC_PER_SEC,
 					       PLIST_FOR_LAT, PLIST_99);
-				show_latencies(&rps_stats, "RPS",
-					       "requests", runtime_delta / USEC_PER_SEC,
+				show_latencies(&rps_stats, "RPS", "requests",
+					       runtime_delta / USEC_PER_SEC,
 					       PLIST_FOR_RPS, PLIST_50);
+				fprintf(stderr,
+					"sched delay: message %llu (usec) worker %llu (usec)\n",
+					message_thread_delay / 1000,
+					worker_thread_delay / 1000);
 				fprintf(stderr, "current rps: %.2f\n", rps);
 			}
 		}
@@ -1725,7 +1821,6 @@ int main(int ac, char **av)
 
 	message_threads_mem = calloc(message_threads * worker_threads + message_threads,
 				      sizeof(struct thread_data));
-
 
 	if (!message_threads_mem) {
 		perror("unable to allocate message threads");
@@ -1804,10 +1899,11 @@ int main(int ac, char **av)
 		fprintf(stderr, "avg worker transfer: %.2f ops/sec %.2f%s/s\n",
 		       loops_per_sec, mb_per_sec, pretty);
 	} else {
-		show_latencies(&wakeup_stats, "Wakeup Latencies", "usec", runtime,
-			       PLIST_FOR_LAT, PLIST_99);
-		show_latencies(&request_stats, "Request Latencies", "usec", runtime,
-			       PLIST_FOR_LAT, PLIST_99);
+		unsigned long long message_thread_delay, worker_thread_delay;
+		show_latencies(&wakeup_stats, "Wakeup Latencies", "usec",
+			       runtime, PLIST_FOR_LAT, PLIST_99);
+		show_latencies(&request_stats, "Request Latencies", "usec",
+			       runtime, PLIST_FOR_LAT, PLIST_99);
 		show_latencies(&rps_stats, "RPS", "requests", runtime,
 			       PLIST_FOR_RPS, PLIST_50);
 		if (!auto_rps) {
@@ -1815,8 +1911,15 @@ int main(int ac, char **av)
 				(double)(loop_count) / runtime);
 		} else {
 			fprintf(stderr, "final rps goal was %d\n",
-	                        requests_per_sec * message_threads);
+				requests_per_sec * message_threads);
 		}
+		collect_sched_delay(message_threads_mem, &message_thread_delay,
+				    &worker_thread_delay);
+
+		fprintf(stderr,
+			"sched delay: message %llu (usec) worker %llu (usec)\n",
+			message_thread_delay / 1000,
+			worker_thread_delay / 1000);
 	}
 
 	return 0;
