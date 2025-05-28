@@ -1594,7 +1594,6 @@ static void sleep_for_runtime(struct thread_data *message_threads_mem)
 	unsigned long long interval_usec = intervaltime * USEC_PER_SEC;
 	unsigned long long zero_usec = zerotime * USEC_PER_SEC;
 	int warmup_done = 0;
-	int total_intervals = 0;
 
 	/* if we're autoscaling RPS */
 	int proc_stat_fd = -1;
@@ -1656,7 +1655,6 @@ static void sleep_for_runtime(struct thread_data *message_threads_mem)
 					       "requests", runtime_delta / USEC_PER_SEC,
 					       PLIST_FOR_RPS, PLIST_50);
 				fprintf(stderr, "current rps: %.2f\n", rps);
-				total_intervals++;
 			}
 		}
 		if (zero_usec) {
