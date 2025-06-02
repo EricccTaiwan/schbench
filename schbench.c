@@ -1108,9 +1108,8 @@ unsigned long long read_sched_delay(pid_t tid)
 
 	FILE *fp = fopen(path, "r");
 	if (!fp) {
-		fprintf(stderr, "Failed to open %s: %s\n", path,
-			strerror(errno));
-		exit(errno);
+		/* this can happen during final stats print at exit */
+		return 0;
 	}
 
 	/*
@@ -1858,8 +1857,6 @@ int main(int ac, char **av)
 	loops_per_sec = loop_count * USEC_PER_SEC;
 	loops_per_sec /= loop_runtime;
 
-	free(message_threads_mem);
-
 	if (json_file) {
 		FILE *outfile;
 
@@ -1921,6 +1918,8 @@ int main(int ac, char **av)
 			message_thread_delay / 1000,
 			worker_thread_delay / 1000);
 	}
+	free(message_threads_mem);
+
 
 	return 0;
 }
