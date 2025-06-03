@@ -1864,7 +1864,7 @@ int main(int ac, char **av)
 			outfile = stdout;
 		else
 			outfile = fopen(json_file, "w");
-		if (!json_file) {
+		if (!outfile) {
 			perror("unable to open json file");
 			exit(1);
 		}
