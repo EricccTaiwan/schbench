@@ -141,7 +141,7 @@ static struct option long_options[] = {
 	{"calibrate", no_argument, 0, 'C'},
 	{"no-locking", no_argument, 0, 'L'},
 	{"operations", required_argument, 0, 'n'},
-	{"sleep_usec", required_argument, 0, 'n'},
+	{"sleep_usec", required_argument, 0, 's'},
 	{"warmuptime", required_argument, 0, 'w'},
 	{"intervaltime", required_argument, 0, 'i'},
 	{"zerotime", required_argument, 0, 'z'},
