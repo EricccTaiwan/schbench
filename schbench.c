@@ -343,7 +343,7 @@ static void parse_options(int ac, char **av)
 		case 'J':
 			jobname = strdup(optarg);
 			if (!jobname) {
-				perror("stdrup");
+				perror("strdup");
 				exit(1);
 			}
 			break;
