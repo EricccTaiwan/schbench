@@ -1382,9 +1382,15 @@ void *worker_thread(void *arg)
 	struct timeval start;
 	unsigned long long delta;
 	struct request *req = NULL;
+	int ret;
 
 	td->sys_tid = get_sys_tid();
 
+	ret = pthread_setname_np(pthread_self(), "schbench-worker");
+	if (ret) {
+		perror("failed to set worker thread name");
+		exit(1);
+	}
 	gettimeofday(&start, NULL);
 	while(1) {
 		if (stopping)
@@ -1496,6 +1502,11 @@ void *message_thread(void *arg)
 	int i;
 	int ret;
 
+	ret = pthread_setname_np(pthread_self(), "schbench-msg");
+	if (ret) {
+		perror("failed to set message thread name");
+		exit(1);
+	}
 	worker_threads_mem = td + 1;
 
 	if (!worker_threads_mem) {
