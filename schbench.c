@@ -563,16 +563,16 @@ static void show_latencies(struct stats *s, char *label, char *units,
 
 static char *escape_string(char *str)
 {
-	char *newstr = malloc(strlen(str) * 2 + 1);
-	char *ptr = newstr;
-	int maxlen = strlen(str) * 2;
 	int len = strlen(str);
+	int maxlen = len * 2;
+	char *newstr = malloc(len * 2 + 1);
+	char *ptr = newstr;
 
 	if (!newstr) {
 		perror("malloc");
 		exit(1);
 	}
-	memcpy(newstr, str, strlen(str));
+	memcpy(newstr, str, len);
 	while ((ptr = strchr(ptr, '"'))) {
 		if (len == maxlen - 1) {
 			free(newstr);
