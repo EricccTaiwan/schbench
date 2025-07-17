@@ -42,38 +42,38 @@
 
 #define USEC_PER_SEC (1000000)
 
-/* -m number of message threads */
+/* -m, number of message threads */
 static int message_threads = 1;
-/* -t  number of workers per message thread */
+/* -t, number of workers per message thread */
 static int worker_threads = 0;
-/* -r  seconds */
+/* -r, seconds */
 static int runtime = 30;
-/* -w  seconds */
+/* -w, seconds */
 static int warmuptime = 0;
-/* -i  seconds */
+/* -i, seconds */
 static int intervaltime = 10;
-/* -z  seconds */
+/* -z, seconds */
 static int zerotime = 0;
-/* -f  cache_footprint_kb */
+/* -f, cache_footprint_kb */
 static unsigned long cache_footprint_kb = 256;
-/* -n  operations */
+/* -n, operations */
 static unsigned long operations = 5;
-/* -s  sleep_usec */
+/* -s, sleep_usec */
 static unsigned long sleep_usec = 100;
 /* -A, int percentage busy */
 static int auto_rps = 0;
 static int auto_rps_target_hit = 0;
-/* -p bytes */
+/* -p, bytes */
 static int pipe_test = 0;
-/* -R requests per sec */
+/* -R, requests per sec */
 static int requests_per_sec = 0;
-/* -C bool for calibration mode */
+/* -C, bool for calibration mode */
 static int calibrate_only = 0;
-/* -L bool no locking during CPU work */
+/* -L, bool no locking during CPU work */
 static int skip_locking = 0;
-/* -j json file */
+/* -j, json file */
 static char *json_file = NULL;
-/* -J jobname */
+/* -J, jobname */
 static char *jobname = NULL;
 
 /* the message threads flip this to true when they decide runtime is up */
