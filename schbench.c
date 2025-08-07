@@ -1134,6 +1134,8 @@ unsigned long long read_sched_delay(pid_t tid)
 #define nop __asm__ __volatile__("yield" ::: "memory")
 #elif defined(__powerpc64__) || defined(__s390__)
 #define nop __asm__ __volatile__("nop": : :"memory")
+#elif defined(__riscv)
+#define nop __asm__ __volatile__("nop": : :"memory")
 #else
 #error Unsupported architecture
 #endif
